@@ -21,7 +21,7 @@ def GetFormatNumber(number, string = '', start = 0):
             if ret != -1: 
                 return ret + start
         elif functionkey == 'X':
-            xpathlist = string.xpath('string(' + number[2:] +')').extract()
+            xpathlist = string.xpath( number[2:] +'/text()').extract()
             if xpathlist:
                 xpathresult = xpathlist[0].strip()
                 if xpathresult:
@@ -34,7 +34,7 @@ def GetFormatNumber(number, string = '', start = 0):
 
 HTTP_OK    = 200
 TotalCrawl = True
-StringList = ['stockname', 'stocknewprice', 'stocktotalamount']
+StringList = ['stockname', 'stocknewprice', 'stocktotalamount', 'stocktodaymount']
 FormatList = [ string + '_format' for string in StringList]
 DStringList = ['d_stocknumber', 'd_stockfullname', 'd_stockstart', 'd_stockweb']
 DFormatList = [ string + '_format' for string in DStringList]
@@ -63,11 +63,11 @@ class AllQuotes(scrapy.Spider):
     def start_requests(self):
         for oneotc in otcconfigure.OTC_SITES:
             # in lambda is val para, in call() is ref para, VERY IMPORTANT !!!
-            request = scrapy.Request(oneotc['homepage'], self.parse_list)
+            request = scrapy.Request(oneotc['homepage'], self.parse_start)
             request.meta['oneotc'] = oneotc
             yield request
 
-    def parse_list(self, response):
+    def parse_start(self, response):
         status = response.status
         if status != HTTP_OK:
             print 'Error in get %s, httpstatus : %d' %(response.url, status)
@@ -91,11 +91,11 @@ class AllQuotes(scrapy.Spider):
 # onepageurl now is the url, should be send as request
             exec(pageurl)
             print 'is there'
-            request = scrapy.Request(onepageurl, self.parse_page)
+            request = scrapy.Request(onepageurl, self.parse_list)
             request.meta['oneotc'] = oneotc
             yield request
 
-    def parse_page(self, response):
+    def parse_list(self, response):
         status = response.status
         if status != HTTP_OK:
             print 'Error in get %s, httpstatus : %d' %(response.url, status)
@@ -106,6 +106,10 @@ class AllQuotes(scrapy.Spider):
 
         for onestock in response.xpath(oneotc['stock_format'])[:3]:   ####### should remove after test
             stockformatlist = onestock.xpath(oneotc['stockid_format']).extract()
+
+#            print 'stockformatlist',  stockformatlist
+
+
             if stockformatlist:
                 stockformat = stockformatlist[0]
             else:
@@ -120,8 +124,8 @@ class AllQuotes(scrapy.Spider):
             GetListofString(stockinfo, onestock, oneotc, StringList, FormatList)
 #            onestockname = onestock.xpath(oneotc['stocktotalamount_format']+'/text()').extract()[0]
 #            print 'onestockname', onestockname, type(onestockname)
+            
             print stockinfo
-
 
             if not TotalCrawl:
                 # output stockinfo with key otc.shortname + onestockid
@@ -164,6 +168,7 @@ class AllQuotes(scrapy.Spider):
 #        onestocknumber = onestock.xpath(oneotc['d_stockweb_format']+'/text()').extract()[0]
 #        print 'onestocknumber', onestocknumber, type(onestocknumber)
         GetListofString(stockinfo, onestock, oneotc, DStringList, DFormatList)
+        stockinfo['stockinfo_url'] = response.url
         print stockinfo
 
     @staticmethod 
