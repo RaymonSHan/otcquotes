@@ -16,10 +16,18 @@ def GetFormatNumber(number, string = '', start = 0):
             ret = string.find(number[2:])
             if ret != -1: 
                 return ret + len(number) - 2 # remove the start 'S:'
-        if functionkey == 'E':
+        elif functionkey == 'E':
             ret = string[start:].find(number[2:])
             if ret != -1: 
                 return ret + start
+        elif functionkey == 'X':
+            xpathlist = string.xpath('string(' + number[2:] +')').extract()
+            if xpathlist:
+                xpathresult = xpathlist[0].strip()
+                if xpathresult:
+                    return int(xpathresult)
+        else:
+            print 'error format', number
     else:
         print 'error type', type(number)
     return -1
@@ -28,17 +36,23 @@ HTTP_OK    = 200
 TotalCrawl = True
 StringList = ['stockname', 'stocknewprice', 'stocktotalamount']
 FormatList = [ string + '_format' for string in StringList]
+DStringList = ['d_stocknumber', 'd_stockfullname', 'd_stockstart', 'd_stockweb']
+DFormatList = [ string + '_format' for string in DStringList]
 
-def GetListofString(onestock, oneotc, stringlist, formatlist):
-    stockdetail = {}
+def GetListofString(stockinfo, onestock, oneotc, stringlist, formatlist):
     for order in xrange(0, len(stringlist)):
         oneformatlist = formatlist[order]
         onestringlist = stringlist[order]
         if oneformatlist in oneotc.keys() and oneotc[oneformatlist]:
-            stockdetail[onestringlist] = onestock.xpath('string('+oneotc[oneformatlist]+')').extract()[0]
+#            stockinfo[onestringlist] = onestock.xpath('string('+oneotc[oneformatlist]+')').extract()[0].strip()
+            infolist = onestock.xpath(oneotc[oneformatlist]+'/text()').extract()
+            if infolist:
+                stockinfo[onestringlist] = infolist[0].strip()
+            else:
+                stockinfo[onestringlist] = ''
         else:
-            stockdetail[onestringlist] = ''
-    return stockdetail
+            stockinfo[onestringlist] = ''
+    return stockinfo
 
 class AllQuotes(scrapy.Spider):
     name = 'AllQuotes'
@@ -54,16 +68,18 @@ class AllQuotes(scrapy.Spider):
             yield request
 
     def parse_list(self, response):
-        oneotc = response.meta['oneotc']
         status = response.status
         if status != HTTP_OK:
             print 'Error in get %s, httpstatus : %d' %(response.url, status)
             return
 
+        oneotc = response.meta['oneotc']
 # should do more for multi page list
         pagestart = GetFormatNumber(oneotc['startpage'])
 # range(1,2) only run once
-        pageend = GetFormatNumber(oneotc['endpage']) + 1
+        pageend = GetFormatNumber(oneotc['endpage'], response) + 1
+        if pagestart == -1 or pageend == -1:
+            return
         pageparalist = []
 
         quotesurl = oneotc['quotes_url']
@@ -74,49 +90,81 @@ class AllQuotes(scrapy.Spider):
         for onepage in range(pagestart, pageend):
 # onepageurl now is the url, should be send as request
             exec(pageurl)
+            print 'is there'
             request = scrapy.Request(onepageurl, self.parse_page)
             request.meta['oneotc'] = oneotc
             yield request
 
     def parse_page(self, response):
-        oneotc = response.meta['oneotc']
         status = response.status
         if status != HTTP_OK:
             print 'Error in get %s, httpstatus : %d' %(response.url, status)
             return
+        oneotc = response.meta['oneotc']
         if not oneotc['stock_format']:
             return
-        for onestock in response.xpath(oneotc['stock_format'])[:3]:
-            stockformat = onestock.xpath(oneotc['stockid_format']).extract()[0]
+
+        for onestock in response.xpath(oneotc['stock_format'])[:3]:   ####### should remove after test
+            stockformatlist = onestock.xpath(oneotc['stockid_format']).extract()
+            if stockformatlist:
+                stockformat = stockformatlist[0]
+            else:
+                continue
             stocklengthstart = GetFormatNumber(oneotc['stock_length_start'], stockformat)
             stocklengthend = GetFormatNumber(oneotc['stock_length_end'], stockformat, stocklengthstart)
+            if stocklengthstart == -1 or stocklengthend == -1:
+                continue
             onestockid = stockformat[stocklengthstart : stocklengthend]
 
-            stockinfo = GetListofString(onestock, oneotc, StringList, FormatList)
-#            onestockname = onestock.xpath('string('+oneotc['stockname_format']+')').extract()[0]
-#            onestocknewprice = onestock.xpath('string('+oneotc['stocknewprice_format']+')').extract()[0]
-#            onestocktotalamount = onestock.xpath('string('+oneotc['stocktotalamount_format']+')').extract()[0]
-#            print onestockname, onestocknewprice, onestocktotalamount
+            stockinfo = {}
+            GetListofString(stockinfo, onestock, oneotc, StringList, FormatList)
+#            onestockname = onestock.xpath(oneotc['stocktotalamount_format']+'/text()').extract()[0]
+#            print 'onestockname', onestockname, type(onestockname)
+            print stockinfo
+
 
             if not TotalCrawl:
+                # output stockinfo with key otc.shortname + onestockid
 # stock detail info should not crawl everytime
                 return
             stockparalist = []
+            if not 'stock_url' in oneotc.keys() or not oneotc['stock_url']:
+                return
             stockdetail = oneotc['stock_url']
             if stockdetail.find('{stockid}') != -1:
                 stockparalist.append('stockid=onestockid')
             stockurl = "onestockurl = stockdetail.format(" + ",".join(stockparalist) + ")"
             exec(stockurl)
 
+
+            print 'onestockurl' , onestockurl
             request = scrapy.Request(onestockurl, self.parse_stock)
             request.meta['oneotc'] = oneotc
             request.meta['info'] = stockinfo
+
+
             yield request
 
     def parse_stock(self, response):
-        print response.meta['info']
+        status = response.status
+        if status != HTTP_OK:
+            print 'Error in get %s, httpstatus : %d' %(response.url, status)
+            return
+        oneotc = response.meta['oneotc']
+        if not 'd_stock_format' in oneotc.keys() or not oneotc['d_stock_format']:
+            return
 
+        stockinfo = response.meta['info']
+        onestocklist = response.xpath(oneotc['d_stock_format'])
+        if onestocklist:
+            onestock = onestocklist[0]
+        else:
+            return
 
+#        onestocknumber = onestock.xpath(oneotc['d_stockweb_format']+'/text()').extract()[0]
+#        print 'onestocknumber', onestocknumber, type(onestocknumber)
+        GetListofString(stockinfo, onestock, oneotc, DStringList, DFormatList)
+        print stockinfo
 
     @staticmethod 
     def parse_tianjin(response):
