@@ -5,7 +5,12 @@
 #
 # Wrapping Column 132.
 import scrapy
+import json
 import otcconfigure
+
+# for signals in scarpy, such as dispatcher.connect(self.initialize, signals.engine_started) 
+from scrapy import signals
+from scrapy.xlib.pydispatch import dispatcher
 
 def GetFormatNumber(number, string = '', start = 0):
     if isinstance(number, int):
@@ -21,16 +26,47 @@ def GetFormatNumber(number, string = '', start = 0):
             if ret != -1: 
                 return ret + start
         elif functionkey == 'X':
-            xpathlist = string.xpath( number[2:] +'/text()').extract()
+            xpathlist = string.xpath(number[2:]).extract()
+            print 'xpathlist', xpathlist
             if xpathlist:
                 xpathresult = xpathlist[0].strip()
                 if xpathresult:
-                    return int(xpathresult)
+                    return xpathresult
         else:
             print 'error format', number
     else:
         print 'error type', type(number)
     return -1
+
+def GetSubString(key, oneotc, string):
+    startkey = key + '_s'
+    endkey = key + '_e'
+    startnum = -1
+    endnum = -1
+    print 'in getsubstring key', key
+    print oneotc
+    print  string
+    if startkey in oneotc.keys() and oneotc[startkey]:
+        startnum = GetFormatNumber(oneotc[startkey], string)
+    if startnum != -1 and endkey in oneotc.keys() and oneotc[endkey]:
+        endnum = GetFormatNumber(oneotc[endkey], string, startnum)
+    print 'after key', startnum, endnum, type(startnum), type(endnum), string[startnum: endnum]
+    if startnum == -1:
+        startnum = 0
+    if endnum == -1:
+        endnum = len(string)
+    return int(string[startnum: endnum])
+
+def GetFormatSubString(key, oneotc, response):
+    firstreturn = GetFormatNumber(oneotc[key], response)
+    print 'firstreturn', firstreturn, type(firstreturn)
+    if isinstance(firstreturn, int):
+        return firstreturn
+    elif isinstance(firstreturn, str) or isinstance(firstreturn, unicode):
+        return GetSubString(key, oneotc, firstreturn)
+    else:
+        return -1
+    
 
 HTTP_OK    = 200
 TotalCrawl = True
@@ -45,14 +81,22 @@ def GetListofString(stockinfo, onestock, oneotc, stringlist, formatlist):
         onestringlist = stringlist[order]
         if oneformatlist in oneotc.keys() and oneotc[oneformatlist]:
 #            stockinfo[onestringlist] = onestock.xpath('string('+oneotc[oneformatlist]+')').extract()[0].strip()
-            infolist = onestock.xpath(oneotc[oneformatlist]+'/text()').extract()
+            infolist = onestock.xpath(oneotc[oneformatlist]).extract()
             if infolist:
-                stockinfo[onestringlist] = infolist[0].strip()
+                stockinfo[onestringlist] = infolist[0].strip().encode('utf-8')
             else:
                 stockinfo[onestringlist] = ''
         else:
             stockinfo[onestringlist] = ''
     return stockinfo
+
+    
+def DisplayStockInfo(totalstock):
+    for onestock in totalstock:
+        for oneattr in onestock.keys():
+            print oneattr + ' : ' + onestock[oneattr] + ',\t',
+        print ''
+    print 'total : ', len(totalstock)
 
 class AllQuotes(scrapy.Spider):
     name = 'AllQuotes'
@@ -60,6 +104,18 @@ class AllQuotes(scrapy.Spider):
     allowed_domains = []
     HTTPERROR_ALLOW_ALL = True
 
+    def __init__(self):
+        dispatcher.connect(self.initialize, signals.engine_started)
+        dispatcher.connect(self.finalize, signals.engine_stopped)
+
+    def initialize(self):
+        self.TotalStock = []
+ 
+    def finalize(self):
+        DisplayStockInfo(self.TotalStock)
+        with open('stockjson', 'wb') as f:
+            f.write(json.dumps(self.TotalStock, ensure_ascii=False))
+ 
     def start_requests(self):
         for oneotc in otcconfigure.OTC_SITES:
             # in lambda is val para, in call() is ref para, VERY IMPORTANT !!!
@@ -74,10 +130,12 @@ class AllQuotes(scrapy.Spider):
             return
 
         oneotc = response.meta['oneotc']
-# should do more for multi page list
-        pagestart = GetFormatNumber(oneotc['startpage'])
+        pagestart = GetFormatSubString('startpage', oneotc, response)
+#        pagestart = GetFormatNumber(oneotc['startpage'])
 # range(1,2) only run once
-        pageend = GetFormatNumber(oneotc['endpage'], response) + 1
+        pageend = GetFormatSubString('endpage', oneotc, response) + 1
+        print 'pagestart end', pagestart, pageend
+#        pageend = GetFormatNumber(oneotc['endpage'], response) + 1
         if pagestart == -1 or pageend == -1:
             return
         pageparalist = []
@@ -90,7 +148,6 @@ class AllQuotes(scrapy.Spider):
         for onepage in range(pagestart, pageend):
 # onepageurl now is the url, should be send as request
             exec(pageurl)
-            print 'is there'
             request = scrapy.Request(onepageurl, self.parse_list)
             request.meta['oneotc'] = oneotc
             yield request
@@ -104,28 +161,24 @@ class AllQuotes(scrapy.Spider):
         if not oneotc['stock_format']:
             return
 
-        for onestock in response.xpath(oneotc['stock_format'])[:3]:   ####### should remove after test
-            stockformatlist = onestock.xpath(oneotc['stockid_format']).extract()
+        for onestock in response.xpath(oneotc['stock_format'])[:3]:   
+#        for onestock in response.xpath(oneotc['stock_format']):
+            onestockid = GetFormatSubString('stockid_format', oneotc, onestock)
+            print 'onestockid', onestockid
+#            stockformatlist = onestock.xpath(oneotc['stockid_format']).extract()
 
-#            print 'stockformatlist',  stockformatlist
-
-
-            if stockformatlist:
-                stockformat = stockformatlist[0]
-            else:
-                continue
-            stocklengthstart = GetFormatNumber(oneotc['stock_length_start'], stockformat)
-            stocklengthend = GetFormatNumber(oneotc['stock_length_end'], stockformat, stocklengthstart)
-            if stocklengthstart == -1 or stocklengthend == -1:
-                continue
-            onestockid = stockformat[stocklengthstart : stocklengthend]
+#            if stockformatlist:
+#                stockformat = stockformatlist[0]
+#            else:
+#                continue
+#            stocklengthstart = GetFormatNumber(oneotc['stock_length_start'], stockformat)
+#            stocklengthend = GetFormatNumber(oneotc['stock_length_end'], stockformat, stocklengthstart)
+#            if stocklengthstart == -1 or stocklengthend == -1:
+#                continue
+#            onestockid = stockformat[stocklengthstart : stocklengthend]
 
             stockinfo = {}
             GetListofString(stockinfo, onestock, oneotc, StringList, FormatList)
-#            onestockname = onestock.xpath(oneotc['stocktotalamount_format']+'/text()').extract()[0]
-#            print 'onestockname', onestockname, type(onestockname)
-            
-            print stockinfo
 
             if not TotalCrawl:
                 # output stockinfo with key otc.shortname + onestockid
@@ -140,12 +193,9 @@ class AllQuotes(scrapy.Spider):
             stockurl = "onestockurl = stockdetail.format(" + ",".join(stockparalist) + ")"
             exec(stockurl)
 
-
-            print 'onestockurl' , onestockurl
             request = scrapy.Request(onestockurl, self.parse_stock)
             request.meta['oneotc'] = oneotc
             request.meta['info'] = stockinfo
-
 
             yield request
 
@@ -165,38 +215,11 @@ class AllQuotes(scrapy.Spider):
         else:
             return
 
-#        onestocknumber = onestock.xpath(oneotc['d_stockweb_format']+'/text()').extract()[0]
-#        print 'onestocknumber', onestocknumber, type(onestocknumber)
         GetListofString(stockinfo, onestock, oneotc, DStringList, DFormatList)
         stockinfo['stockinfo_url'] = response.url
-        print stockinfo
-
-    @staticmethod 
-    def parse_tianjin(response):
-        print 'in tianjin', response.url
-            
-    @staticmethod
-    def statictest():
-        print 'asdf'
+        stockinfo['d_stocknumber'] = ''.join([stockinfo['d_stocknumber'], '.' + oneotc['shortname']])
+        self.TotalStock.append(stockinfo)
 
 
-class TestQuotes(scrapy.Spider):
-    name = 'Quotes'
-    start_urls = ['http://www.tjsoc.com/web/homepage.aspx?name=schq']
-    def parse(self, response):
-        for onestock in response.xpath('//table[@id="ContentPlaceHolder1_GridView1"]//tr[@onclick]'):
-#            print onestock
-            stockid = onestock.xpath('./@onclick').extract()[0]
-            print stockid
 
-if __name__ == '__main__':
-   name = 'asdf'
-   room = 234
-   website = 'http'
-   aaa = "MY name is:%s\nMy room is:%d\nMy website is:%s"%(name,room,website)
-   print aaa
-   test = AllQuotes()
-   AllQuotes.statictest()
-   print AllQuotes.name
-   print test.name
 
