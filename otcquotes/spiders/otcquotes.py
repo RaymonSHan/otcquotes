@@ -66,6 +66,47 @@ def GetFormatSubString(key, oneotc, response):
         return GetSubString(key, oneotc, firstreturn)
     else:
         return -1
+
+def GetNumberByFind(key, result):
+    if isinstance(key, int):
+        return key
+    elif isinstance(key, str) or isinstance(key, unicode):
+        place = result.find(key)
+        if place != -1:
+            return place
+        else:
+            raise
+
+def GetStringByXpath(xpathkey, response):
+    if isinstance(xpathkey, list):
+        xpathkeynumber = len(xpathkey)
+        if xpathkeynumber >= 1:
+            realxpathkey = xpathkey[0]
+        else:
+            return ''
+    elif isinstance(xpathkey, int):
+        return str(xpathkey)
+    elif isinstance(xpathkey, str) or isinstance(xpath, unicode):
+        xpathkeynumber = 0
+        realxpathkey = xpathkey
+    else:
+        return ''
+
+    try:
+        xpathresult = response.xpath(realxpathkey).extract()[0].strip()
+    except:
+        return ''
+    if xpathkeynumber >= 2:
+        resultstart = GetNumberByFind(xpathkey[1], xpathresult) + len(xpathkey[1])
+        print 'in >= 2', xpathkey[1], xpathresult, resultstart
+    else:
+        resultstart = 0
+    if xpathkeynumber >= 3:
+        resultend = GetNumberByFind(xpathkey[2], xpathresult[resultstart:]) + resultstart
+        print 'in >= 3', xpathkey[2], xpathresult, resultend
+    else:
+        resultend = len(xpathresult)
+    return xpathresult[resultstart : resultend]
     
 
 HTTP_OK    = 200
@@ -130,10 +171,10 @@ class AllQuotes(scrapy.Spider):
             return
 
         oneotc = response.meta['oneotc']
-        pagestart = GetFormatSubString('startpage', oneotc, response)
+        pagestart = int(GetStringByXpath(oneotc['startpage'], response))
 #        pagestart = GetFormatNumber(oneotc['startpage'])
 # range(1,2) only run once
-        pageend = GetFormatSubString('endpage', oneotc, response) + 1
+        pageend = int(GetStringByXpath(oneotc['endpage'], response)) + 1
         print 'pagestart end', pagestart, pageend
 #        pageend = GetFormatNumber(oneotc['endpage'], response) + 1
         if pagestart == -1 or pageend == -1:
@@ -163,7 +204,8 @@ class AllQuotes(scrapy.Spider):
 
         for onestock in response.xpath(oneotc['stock_format'])[:3]:   
 #        for onestock in response.xpath(oneotc['stock_format']):
-            onestockid = GetFormatSubString('stockid_format', oneotc, onestock)
+            print 'onestock', onestock
+            onestockid = GetStringByXpath(oneotc['stockid_format'], onestock)
             print 'onestockid', onestockid
 #            stockformatlist = onestock.xpath(oneotc['stockid_format']).extract()
 
