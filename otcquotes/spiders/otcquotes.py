@@ -12,50 +12,36 @@ from otcconfigure import *
 from scrapy import signals
 from scrapy.xlib.pydispatch import dispatcher
 
-def GetFormatNumber(number, string = '', start = 0):
-    if isinstance(number, int):
-        return number
-    elif isinstance(number, str):
-        functionkey = number[:1]
-        if functionkey == 'S':
-            ret = string.find(number[2:])
-            if ret != -1: 
-                return ret + len(number) - 2 # remove the start 'S:'
-        elif functionkey == 'E':
-            ret = string[start:].find(number[2:])
-            if ret != -1: 
-                return ret + start
-        elif functionkey == 'X':
-            xpathlist = string.xpath(number[2:]).extract()
-            print 'xpathlist', xpathlist
-            if xpathlist:
-                xpathresult = xpathlist[0].strip()
-                if xpathresult:
-                    return xpathresult
-        else:
-            print 'error format', number
-    else:
-        print 'error type', type(number)
-    return -1
+HTTP_OK                         = 200
 
-def GetFormatSubString(key, oneotc, response):
-    firstreturn = GetFormatNumber(oneotc[key], response)
-    print 'firstreturn', firstreturn, type(firstreturn)
-    if isinstance(firstreturn, int):
-        return firstreturn
-    elif isinstance(firstreturn, str) or isinstance(firstreturn, unicode):
-        return GetSubString(key, oneotc, firstreturn)
-    else:
-        return -1
+DATATYPEDICT = {
+  'int'                         : [
+    STOCKTODAYAMOUNT, STOCKTOTALAMOUNT,
+  ],
+  'float'                       : [
+    STOCKNEWPRICE,
+  ],
+}
 
 def GetStockDetail(stockinfo, infodict, response):              # here stockinfo is ref para
     for oneinfokey in infodict.keys():
         if oneinfokey:
             oneinforesult = GetStringByXpath(infodict[oneinfokey], response)
+            if oneinfokey in DATATYPEDICT['int']:
+                try:
+                    stockinfo[oneinfokey] = int(oneinforesult)
+                except:
+                    stockinfo[oneinfokey] = int(0)
+            elif oneinfokey in DATATYPEDICT['float']:
+                try:
+                    stockinfo[oneinfokey] = float(oneinforesult)
+                except:
+                    stockinfo[oneinfokey] = float(0)
+            else:
+                stockinfo[oneinfokey] = oneinforesult
         else:
             oneinforesult = ''
-        stockinfo[oneinfokey] = oneinforesult
-        print 'oneinfokey, oneinforesult', oneinfokey, oneinforesult
+            stockinfo[oneinfokey] = oneinforesult
 
 def GetNumberByFind(key, result):
     if isinstance(key, int):
@@ -81,47 +67,27 @@ def GetStringByXpath(xpathkey, response):
         realxpathkey = xpathkey
     else:
         return ''
+    if not realxpathkey:
+        return ''
 
     try:
         xpathresult = response.xpath(realxpathkey).extract()[0].strip().encode('utf-8')
     except:
         return ''
-    if xpathkeynumber >= 2:
+    if xpathkeynumber > POS_START:
         resultstart = GetNumberByFind(xpathkey[1], xpathresult) + len(xpathkey[1])
-        print 'in >= 2', xpathkey[1], xpathresult, resultstart
     else:
         resultstart = 0
-    if xpathkeynumber >= 3:
+    if xpathkeynumber > POS_END:
         resultend = GetNumberByFind(xpathkey[2], xpathresult[resultstart:]) + resultstart
-        print 'in >= 3', xpathkey[2], xpathresult, resultend
     else:
         resultend = len(xpathresult)
     return xpathresult[resultstart : resultend]
     
-
-HTTP_OK    = 200
-TotalCrawl = True
-
-def GetListofString(stockinfo, onestock, oneotc, stringlist, formatlist):
-    for order in xrange(0, len(stringlist)):
-        oneformatlist = formatlist[order]
-        onestringlist = stringlist[order]
-        if oneformatlist in oneotc.keys() and oneotc[oneformatlist]:
-#            stockinfo[onestringlist] = onestock.xpath('string('+oneotc[oneformatlist]+')').extract()[0].strip()
-            infolist = onestock.xpath(oneotc[oneformatlist]).extract()
-            if infolist:
-                stockinfo[onestringlist] = infolist[0].strip().encode('utf-8')
-            else:
-                stockinfo[onestringlist] = ''
-        else:
-            stockinfo[onestringlist] = ''
-    return stockinfo
-
-    
 def DisplayStockInfo(totalstock):
     for onestock in totalstock:
         for oneattr in onestock.keys():
-            print oneattr + ' : ' + onestock[oneattr] + ',\t',
+            print oneattr + ' : ' + str(onestock[oneattr]) + ',\t',
         print ''
     print 'total : ', len(totalstock)
 
@@ -144,7 +110,6 @@ class AllQuotes(scrapy.Spider):
  
     def start_requests(self):
         for oneotc in OTC_SITES:
-            # in lambda is val para, in call() is ref para, VERY IMPORTANT !!!
             request = scrapy.Request(oneotc[HOMEPAGE_URL], self.parse_start)
             request.meta['oneotc'] = oneotc
             yield request
@@ -192,18 +157,13 @@ class AllQuotes(scrapy.Spider):
         if not ONESTOCK_FORMAT in oneotc.keys() or not oneotc[ONESTOCK_FORMAT]:
             return
 
-        for onestockinlist in response.xpath(oneotc[ONESTOCK_FORMAT])[:3]:   
-#        for onestock in response.xpath(oneotc[ONESTOCK_FORMAT]):
-            print 'onestock', onestockinlist
+        for onestockinlist in response.xpath(oneotc[ONESTOCK_FORMAT]):   
             onestockid = GetStringByXpath(oneotc[ONESTOCKID], onestockinlist)
-            print 'onestockid', onestockid
 
             stockinfo = {}
             GetStockDetail(stockinfo, oneotc[LISTPAGEDETAIL], onestockinlist)
-#            GetListofString(stockinfo, onestock, oneotc, StringList, FormatList)
 
-            if not TotalCrawl:
-                # output stockinfo with key otc.shortname + onestockid
+            if not TOTAL_CRAWL:
 # stock detail info should not crawl everytime
                 return
             stockparalist = []
@@ -212,13 +172,12 @@ class AllQuotes(scrapy.Spider):
             stockdetail = oneotc[DETAILSTOCK_URL]
             if stockdetail.find('{stockid}') != -1:
                 stockparalist.append('stockid=onestockid')
-            stockurl = "onestockurl = stockdetail.format(" + ",".join(stockparalist) + ")"
+            stockurl = 'onestockurl = stockdetail.format(' + ','.join(stockparalist) + ')'
             exec(stockurl)
 
             request = scrapy.Request(onestockurl, self.parse_stock)
             request.meta['oneotc'] = oneotc
             request.meta['info'] = stockinfo
-
             yield request
 
     def parse_stock(self, response):
@@ -230,15 +189,31 @@ class AllQuotes(scrapy.Spider):
         stockinfo = response.meta['info']
 
         if not DETAILSTOCK_FORMAT in oneotc.keys() or not oneotc[DETAILSTOCK_FORMAT]:
-            return
+            onestockdetail = response
+        else:
+            onestockdetail = response.xpath(oneotc[DETAILSTOCK_FORMAT])
+        GetStockDetail(stockinfo, oneotc[STOCKPAGEDETAIL], onestockdetail)
 
-        onestockdetail = response.xpath(oneotc[DETAILSTOCK_FORMAT])
-        GetStockDetail(stockinfo, oneotc[LISTPAGEDETAIL], onestockdetail)
+        formatedstockinfo = FormatStockInfo(oneotc, stockinfo, response)
+        self.TotalStock.append(formatedstockinfo)
 
-        stockinfo[STOCKINFOURL] = response.url
-        stockinfo[STOCKNUMBER] = ''.join([stockinfo[STOCKNUMBER], '.' + oneotc[ABBRNAME]])
-        self.TotalStock.append(stockinfo)
+def FormatStockInfo(oneotc, stockinfo, response):
+    displayformat = oneotc[DISPLAYINFODETAIL]
+    if not displayformat:
+        return stockinfo
 
+    newinfo = stockinfo
+    for onedetail in displayformat.keys():
+        displayparaplist = []
+        oneformat = displayformat[onedetail]
 
+        if oneformat.find('{STOCKNUMBER}') != -1:
+            displayparaplist.append('STOCKNUMBER=stockinfo[STOCKNUMBER]')
+        if oneformat.find('{ABBRNAME}') != -1:
+            displayparaplist.append('ABBRNAME=oneotc[ABBRNAME]')
+        if oneformat.find('{STOCKURL}') != -1:
+            displayparaplist.append('STOCKURL=response.url')
 
-
+        displayexec = 'newinfo[onedetail] = oneformat.format(' + ','.join(displayparaplist) + ')'
+        exec(displayexec)
+    return newinfo
