@@ -12,6 +12,65 @@ from otcconfigure import *
 from scrapy import signals
 from scrapy.xlib.pydispatch import dispatcher
 
+
+
+import MySQLdb
+import datetime
+
+import time
+
+exampleinfo = {
+'StockIdInListPage' : '52', 'StockTodayAmount' : 110, 'StockNewPrice' : 1.65, 'StockId' : '52.ah', 'StockName' : '开元软件',
+}
+
+'''	
+StockIdInListPage : 54,	StockTodayAmount : 0,	StockNewPrice : 0.98,	StockId : 54.ah,	StockName : 黄山一建,	
+StockIdInListPage : 55,	StockTodayAmount : 0,	StockNewPrice : 4.0,	StockId : 55.ah,	StockName : 朝晖股份,	
+StockIdInListPage : 103,	StockTodayAmount : 0,	StockNewPrice : 1.06,	StockId : 103.ah,	StockName : 新方舟,	
+'''
+
+def GeneratorSQLxxx(stockinfo, columndictall):
+    stockinfo[UPDATETIME] = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+
+    columndict = columndictall[1]
+    columnvalue = columndict.values()
+    stockvalue = [stockinfo.get(key, 0) for key in columndict.keys()]
+    questionvalue = ['?' for key in xrange(0, len(columndict))]
+    
+    sql_insert = 'insert into '+columndictall[0]+'('+','.join(columnvalue)+') values ('+','.join(questionvalue)+')'
+    print columnvalue
+    print stockvalue
+    print questionvalue
+    print sql_insert
+        
+
+
+if __name__ == '__main__':
+    stockinfo = {}
+    GeneratorSQL(exampleinfo, GLOBAL_INFO[DATABASEQUOTATION])
+
+def notused():
+    try:
+
+        sql_content = "insert into table(key1,key2,key3) values (?,?,?)"
+        cur.execute(sql_content,(value1,value2,value3))
+
+        conn=MySQLdb.connect(host='192.168.206.139',user='root',passwd='',db='mysql',port=3306)
+        cur=conn.cursor()
+
+        value=[1,'hi rollen']
+        cur.execute('insert into test values(%s,%s)',value)
+        "insert into table(key1,key2,key3) values (%s,%s,%s)"%(value1,value2,value3)
+
+        count=cur.execute('select * from user')
+        result=cur.fetchone()
+        print result, type(result)
+        cur.close()
+        conn.close()
+    except MySQLdb.Error,e:
+        print "Mysql Error %d: %s" % (e.args[0], e.args[1])
+
+
 HTTP_OK                         = 200
 
 DATATYPEDICT = {
@@ -91,8 +150,37 @@ def DisplayStockInfo(totalstock):
         print ''
     print 'total : ', len(totalstock)
 
+def JoinDictionary(localdict, globaldict):
+    for onekey in globaldict:
+        if not onekey in localdict:
+            localdict[onekey] = globaldict[onekey]
+        elif isinstance(localdict[onekey], dict) and isinstance(globaldict[onekey], dict):
+            JoinDictionary(localdict[onekey], globaldict[onekey])
+
+def FormatStockInfo(oneotc, stockinfo, response, displayformat):
+    if not displayformat:
+        return stockinfo
+
+    newinfo = stockinfo
+    for onedetail in displayformat.keys():
+        displayparaplist = []
+        oneformat = displayformat[onedetail]
+
+        if oneformat.find('{STOCKNUMBER}') != -1:
+            displayparaplist.append('STOCKNUMBER=stockinfo[STOCKNUMBER]')
+        if oneformat.find('{ABBRNAME}') != -1:
+            displayparaplist.append('ABBRNAME=oneotc[ABBRNAME]')
+        if oneformat.find('{STOCKURL}') != -1:
+            displayparaplist.append('STOCKURL=response.url')
+        if oneformat.find('{ONESTOCKID}') != -1:
+            displayparaplist.append('ONESTOCKID=stockinfo[ONESTOCKID]')
+
+        displayexec = 'newinfo[onedetail] = oneformat.format(' + ','.join(displayparaplist) + ')'
+        exec(displayexec)
+    return newinfo
+
 class AllQuotes(scrapy.Spider):
-    name = 'AllQuotes'
+    name = 'otcquotes'
     allowed_domains = []
     HTTPERROR_ALLOW_ALL = True
 
@@ -110,6 +198,7 @@ class AllQuotes(scrapy.Spider):
  
     def start_requests(self):
         for oneotc in OTC_SITES:
+            JoinDictionary(oneotc, GLOBAL_INFO)
             request = scrapy.Request(oneotc[HOMEPAGE_URL], self.parse_start)
             request.meta['oneotc'] = oneotc
             yield request
@@ -159,16 +248,22 @@ class AllQuotes(scrapy.Spider):
 
         for onestockinlist in response.xpath(oneotc[ONESTOCK_FORMAT]):   
             onestockid = GetStringByXpath(oneotc[ONESTOCKID], onestockinlist)
+            if not onestockid:
+                continue
 
             stockinfo = {}
+            stockinfo[ONESTOCKID] = onestockid
             GetStockDetail(stockinfo, oneotc[LISTPAGEDETAIL], onestockinlist)
 
             if not TOTAL_CRAWL:
 # stock detail info should not crawl everytime
-                return
+                formatedstockinfo = FormatStockInfo(oneotc, stockinfo, response, oneotc[DISPLAYINFOPRICE])
+                self.TotalStock.append(formatedstockinfo)
+                continue
+
             stockparalist = []
             if not DETAILSTOCK_URL in oneotc.keys() or not oneotc[DETAILSTOCK_URL]:
-                return
+                continue
             stockdetail = oneotc[DETAILSTOCK_URL]
             if stockdetail.find('{stockid}') != -1:
                 stockparalist.append('stockid=onestockid')
@@ -194,26 +289,18 @@ class AllQuotes(scrapy.Spider):
             onestockdetail = response.xpath(oneotc[DETAILSTOCK_FORMAT])
         GetStockDetail(stockinfo, oneotc[STOCKPAGEDETAIL], onestockdetail)
 
-        formatedstockinfo = FormatStockInfo(oneotc, stockinfo, response)
-        self.TotalStock.append(formatedstockinfo)
+        if stockinfo[STOCKNUMBER]:
+            formatedstockinfo = FormatStockInfo(oneotc, stockinfo, response, oneotc[DISPLAYINFODETAIL])
+            self.TotalStock.append(formatedstockinfo)
 
-def FormatStockInfo(oneotc, stockinfo, response):
-    displayformat = oneotc[DISPLAYINFODETAIL]
-    if not displayformat:
-        return stockinfo
 
-    newinfo = stockinfo
-    for onedetail in displayformat.keys():
-        displayparaplist = []
-        oneformat = displayformat[onedetail]
-
-        if oneformat.find('{STOCKNUMBER}') != -1:
-            displayparaplist.append('STOCKNUMBER=stockinfo[STOCKNUMBER]')
-        if oneformat.find('{ABBRNAME}') != -1:
-            displayparaplist.append('ABBRNAME=oneotc[ABBRNAME]')
-        if oneformat.find('{STOCKURL}') != -1:
-            displayparaplist.append('STOCKURL=response.url')
-
-        displayexec = 'newinfo[onedetail] = oneformat.format(' + ','.join(displayparaplist) + ')'
-        exec(displayexec)
-    return newinfo
+'''
+CREATE TABLE `quotes`.`stock_quotation` (
+  `line_number` INT NOT NULL AUTO_INCREMENT,
+  `stock_id` VARCHAR(32) NOT NULL,
+  `stock_price` FLOAT NULL DEFAULT 0,
+  `stock_totalamount` INT NULL DEFAULT 0,
+  `stock_todayamount` INT NULL DEFAULT 0,
+  `update_time` DATETIME NOT NULL,
+  PRIMARY KEY (`line_number`));
+'''
