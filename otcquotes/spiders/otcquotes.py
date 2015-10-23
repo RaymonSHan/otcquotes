@@ -1,7 +1,4 @@
-# -*- coding:gbk -*-
-#
-# Althought I do not input any Chinese in my project, I still insert this progma before any codes.
-# Recommen GBK instead of Unicode or UTF-8 in any case.
+# -*- coding:utf-8 -*-
 #
 # Wrapping Column 132.
 import scrapy
@@ -12,75 +9,125 @@ from otcconfigure import *
 from scrapy import signals
 from scrapy.xlib.pydispatch import dispatcher
 
-
-
 import MySQLdb
 import datetime
 
 import time
 
-exampleinfo = {
-'StockIdInListPage' : '52', 'StockTodayAmount' : 110, 'StockNewPrice' : 1.65, 'StockId' : '52.ah', 'StockName' : '开元软件',
-}
+# the view way
+'''
+select d.*
+  from stock_detail d,
+    (select stock_id, max(line_number) as ts from stock_detail group by stock_id) m
+  where d.stock_id = m.stock_id and d.line_number = m.ts
 
-'''	
-StockIdInListPage : 54,	StockTodayAmount : 0,	StockNewPrice : 0.98,	StockId : 54.ah,	StockName : 黄山一建,	
-StockIdInListPage : 55,	StockTodayAmount : 0,	StockNewPrice : 4.0,	StockId : 55.ah,	StockName : 朝晖股份,	
-StockIdInListPage : 103,	StockTodayAmount : 0,	StockNewPrice : 1.06,	StockId : 103.ah,	StockName : 新方舟,	
+
+
+in fetchall
+(13L, '63.ah', '800015.ah', '\xe7\xa5\x9e\xe8\x99\xb9\xe8\x82\xa1\xe4\xbb\xbd', '\xe5\xae\x89\xe5\xbe\xbd\xe7\x9c\x81\xe7\xa5\x9e\xe8\x99\xb9\xe5\x8f\x98\xe5\x8e\x8b\xe5\x99\xa8\xe8\x82\xa1\xe4\xbb\xbd\xe6\x9c\x89\xe9\x99\x90\xe5\x85\xac\xe5\x8f\xb8', '', '2013-09-30', 'http://www.ahsgq.com/aee/bm/bminfo.jsp?id=63', datetime.datetime(2015, 10, 23, 12, 33, 31)) <type 'tuple'>
 '''
 
-def GeneratorSQLxxx(stockinfo, columndictall):
-    stockinfo[UPDATETIME] = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+def GeneratorInsertHead(columndictall):
+    columnvalue = columndictall[POS_COLUMN].values()
+    sql_insert = 'insert into '+columndictall[POS_TABLE]+'('+','.join(columnvalue)+') values '
+    return sql_insert
 
-    columndict = columndictall[1]
-    columnvalue = columndict.values()
-    stockvalue = [stockinfo.get(key, 0) for key in columndict.keys()]
-    questionvalue = ['?' for key in xrange(0, len(columndict))]
+def GeneratorUsefulColumn(columndictall, alias):
+    columndict = columndictall[POS_COLUMN]
+    columnvalue = []
+    if alias:
+        alias = alias + '.'
+    for key in columndict:
+        if key != UPDATETIME:
+            columnvalue.append(alias+columndict[key])
+    return columnvalue
+
+def GeneratorSelectHead(columndictall, alias):
+    columnvalue = GeneratorUsefulColumn(columndictall, alias)
+    return 'select ' + ','.join(columnvalue) + ' from '
+
+def GeneratorOneRecord(stockinfo, columndict):
+    onerecord = []
+    for onekey in columndict.keys():
+        isnumber = onekey in DATATYPEDICT['int'] or onekey in DATATYPEDICT['float']
+        if isnumber:
+            onerecord.append(str(stockinfo.get(onekey, 0)))
+        else:
+            onerecord.append('\''+stockinfo.get(onekey, '')+'\'')
+    return '('+','.join(onerecord)+')'
+
+def GeneratorInsert(allstockinfo, columndictall):
+    inserthead = GeneratorInsertHead(columndictall)
+    nowtime = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    records = []
+    for onestockinfo in allstockinfo:
+        onestockinfo[UPDATETIME] = nowtime
+        records.append(GeneratorOneRecord(onestockinfo, columndictall[POS_COLUMN]))
+    return inserthead + ','.join(records) + ';'
+
+def GeneratorNewest(columndictall, alias):
+    sql_select = '{table} {alias}, (select {sid}, max(line_number) as ts from {table} group by {sid}) viewalias where {alias}.{sid}=viewalias.{sid} and {alias}.line_number=viewalias.ts'.format(table=columndictall[POS_TABLE], sid=columndictall[POS_COLUMN][STOCKID], alias=alias)
+    return sql_select
+
+def GeneratorSelectNewest(columndictall):
+    return GeneratorSelectHead(columndictall, 'd') + GeneratorNewest(columndictall, 'd')
     
-    sql_insert = 'insert into '+columndictall[0]+'('+','.join(columnvalue)+') values ('+','.join(questionvalue)+')'
-    print columnvalue
-    print stockvalue
-    print questionvalue
-    print sql_insert
-        
-
-
-if __name__ == '__main__':
-    stockinfo = {}
-    GeneratorSQL(exampleinfo, GLOBAL_INFO[DATABASEQUOTATION])
-
-def notused():
+def InsertQuotes(allstockinfo, globalinfo):
     try:
-
-        sql_content = "insert into table(key1,key2,key3) values (?,?,?)"
-        cur.execute(sql_content,(value1,value2,value3))
-
         conn=MySQLdb.connect(host='192.168.206.139',user='root',passwd='',db='mysql',port=3306)
         cur=conn.cursor()
+# found this line for two hours, useful in http://www.cnblogs.com/discuss/articles/1862248.html
+        cur.execute('SET NAMES "utf8";')
 
-        value=[1,'hi rollen']
-        cur.execute('insert into test values(%s,%s)',value)
-        "insert into table(key1,key2,key3) values (%s,%s,%s)"%(value1,value2,value3)
+        allsql = GeneratorInsert(allstockinfo, globalinfo[DATABASEQUOTATION])
+        cur.execute(allsql)
 
-        count=cur.execute('select * from user')
-        result=cur.fetchone()
-        print result, type(result)
+        if TOTAL_CRAWL:
+            allsql = GeneratorInsert(allstockinfo, globalinfo[DATABASEDETAIL])
+            cur.execute(allsql)
+
+        conn.commit()
         cur.close()
         conn.close()
     except MySQLdb.Error,e:
         print "Mysql Error %d: %s" % (e.args[0], e.args[1])
 
+if __name__ == '__main__':
+    try:
+        conn=MySQLdb.connect(host='192.168.206.139',user='root',passwd='',db='mysql',port=3306)
+        cur=conn.cursor()
+        cur.execute('SET NAMES "utf8";')
+        sql = GeneratorSelectNewest(GLOBAL_INFO[DATABASEDETAIL])
+
+        cur.execute(sql)
+
+#infos = [(dict(name=row[1], sex=row[2],age=row[3]) for row in cur.fetchall())]
+
+#        cur.execute(GeneratorSelect(GLOBAL_INFO[DATABASEDETAIL]))
+        stockdict = {}
+        usefulcolumn = GeneratorUsefulColumn(GLOBAL_INFO[DATABASEDETAIL], '')
+        print 'useful', usefulcolumn
+        for onerow in cur.fetchall():
+            onestockdict = {}
+            sequ = 0
+            for onecol in usefulcolumn:
+                print onecol
+                onestockdict[onecol] = onerow[sequ]
+                sequ += 1
+            stockid = GLOBAL_INFO[DATABASEDETAIL][POS_COLUMN][STOCKID]
+            stockdict[onestockdict[stockid]] = onestockdict
+
+#            for 
+#            stockdict[print onecolumn, type(onecolumn)
+        print stockdict
+
+        cur.close()
+        conn.close()
+    except MySQLdb.Error,e:
+        print "Mysql Error %d: %s" % (e.args[0], e.args[1])
+    print 'In main'
 
 HTTP_OK                         = 200
-
-DATATYPEDICT = {
-  'int'                         : [
-    STOCKTODAYAMOUNT, STOCKTOTALAMOUNT,
-  ],
-  'float'                       : [
-    STOCKNEWPRICE,
-  ],
-}
 
 def GetStockDetail(stockinfo, infodict, response):              # here stockinfo is ref para
     for oneinfokey in infodict.keys():
@@ -193,8 +240,9 @@ class AllQuotes(scrapy.Spider):
  
     def finalize(self):
         DisplayStockInfo(self.TotalStock)
-        with open('stockjson', 'wb') as f:
-            f.write(json.dumps(self.TotalStock, ensure_ascii=False))
+        InsertQuotes(self.TotalStock, GLOBAL_INFO)
+#        with open('stockjson', 'wb') as f:
+#            f.write(json.dumps(self.TotalStock, ensure_ascii=False))
  
     def start_requests(self):
         for oneotc in OTC_SITES:

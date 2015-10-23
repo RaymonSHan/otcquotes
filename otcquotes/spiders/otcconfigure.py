@@ -1,7 +1,4 @@
-# -*- coding:gbk -*-
-#
-# Althought I do not input any Chinese in my project, I still insert this progma before any codes.
-# Recommen GBK instead of Unicode or UTF-8 in any case.
+# -*- coding:utf-8 -*-
 #
 # Wrapping Column 132.
 
@@ -45,7 +42,19 @@ POS_XPATH                       = 0
 POS_START                       = 1
 POS_END                         = 2
 
-TOTAL_CRAWL                     = False
+POS_TABLE                       = 0
+POS_COLUMN                      = 1
+
+TOTAL_CRAWL                     = True
+
+DATATYPEDICT = {
+  'int'                         : [
+    STOCKTODAYAMOUNT, STOCKTOTALAMOUNT,
+  ],
+  'float'                       : [
+    STOCKNEWPRICE,
+  ],
+}
 
 GLOBAL_INFO                     = {
     DISPLAYINFOPRICE            : {
