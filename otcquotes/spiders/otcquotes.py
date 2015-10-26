@@ -71,7 +71,8 @@ def GeneratorNewest(columndictall, alias):
 
 def GeneratorSelectNewest(columndictall):
     return GeneratorSelectHead(columndictall, 'd') + GeneratorNewest(columndictall, 'd')
-    
+
+
 def InsertQuotes(allstockinfo, globalinfo):
     try:
         conn=MySQLdb.connect(host='192.168.206.139',user='root',passwd='',db='mysql',port=3306)
@@ -92,40 +93,82 @@ def InsertQuotes(allstockinfo, globalinfo):
     except MySQLdb.Error,e:
         print "Mysql Error %d: %s" % (e.args[0], e.args[1])
 
-if __name__ == '__main__':
+def GetNewestRecord(cur, globalinfo):
     try:
-        conn=MySQLdb.connect(host='192.168.206.139',user='root',passwd='',db='mysql',port=3306)
-        cur=conn.cursor()
-        cur.execute('SET NAMES "utf8";')
-        sql = GeneratorSelectNewest(GLOBAL_INFO[DATABASEDETAIL])
-
+        sql = GeneratorSelectNewest(globalinfo)
         cur.execute(sql)
-
-#infos = [(dict(name=row[1], sex=row[2],age=row[3]) for row in cur.fetchall())]
-
-#        cur.execute(GeneratorSelect(GLOBAL_INFO[DATABASEDETAIL]))
         stockdict = {}
-        usefulcolumn = GeneratorUsefulColumn(GLOBAL_INFO[DATABASEDETAIL], '')
-        print 'useful', usefulcolumn
+        usefulcolumn = GeneratorUsefulColumn(globalinfo, '')
+
         for onerow in cur.fetchall():
             onestockdict = {}
             sequ = 0
             for onecol in usefulcolumn:
-                print onecol
                 onestockdict[onecol] = onerow[sequ]
+#                print onecol, onestockdict[onecol]
                 sequ += 1
-            stockid = GLOBAL_INFO[DATABASEDETAIL][POS_COLUMN][STOCKID]
+            stockid = globalinfo[POS_COLUMN][STOCKID]
             stockdict[onestockdict[stockid]] = onestockdict
-
-#            for 
-#            stockdict[print onecolumn, type(onecolumn)
-        print stockdict
-
-        cur.close()
-        conn.close()
     except MySQLdb.Error,e:
         print "Mysql Error %d: %s" % (e.args[0], e.args[1])
-    print 'In main'
+    return stockdict
+
+def OpenMySQL(connstr):
+    try:
+        conn = MySQLdb.connect(host=connstr.get(MYSQL_HOST), user=connstr.get(MYSQL_USER, 'root'), passwd=connstr.get(MYSQL_PASSWD, ''), db=connstr.get(MYSQL_DB, 'mysql'), port=connstr.get(MYSQL_PORT, 3306))
+    except MySQLdb.Error,e:
+        print "Mysql Error %d: %s" % (e.args[0], e.args[1])
+        return None
+    return conn
+
+def OpenCursor(conn):
+    try:    
+        cur=conn.cursor()
+        cur.execute('SET NAMES "utf8";')
+    except MySQLdb.Error,e:
+        print "Mysql Error %d: %s" % (e.args[0], e.args[1])
+        return None
+    return cur
+
+def CloseMySQL(oneobject):
+    try:
+        oneobject.close()
+    except MySQLdb.Error,e:
+        print "Mysql Error %d: %s" % (e.args[0], e.args[1])
+
+def IsRecordChange(newrecord, originrecord, columndict):
+    for onecol in columndict:
+        if onecol in newrecord.keys() and newrecord[onecol] != originrecord[columndict[onecol]]:
+            return True
+    return False
+
+def CompareRecord(allstockinfo, recordlist, globalinfo):
+    shouldupdate = []
+    for onestock in allstockinfo:
+#        print 'onestock', onestock
+
+        #datafield = globalinfo[onestock]
+        stockid = onestock[STOCKID]
+        if not stockid in recordlist:
+            shouldupdate.append(onestock)
+            print 'add append in no stock', stockid
+        elif IsRecordChange(onestock, recordlist[stockid], globalinfo[POS_COLUMN]):
+            shouldupdate.append(onestock)
+            print 'add append for change', stockid
+    return shouldupdate
+
+def UpdateRecordIfNew(cur, globalinfo):
+    newrecord = GetNewestRecord(cur, globalinfo)
+    shouldupdate = CompareRecord(TotalStock, newrecord, globalinfo)
+    if shouldupdate:
+        allsql = GeneratorInsert(shouldupdate, globalinfo)
+        cur.execute(allsql)
+
+if __name__ == '__main__':
+    MySQLConnect = OpenMySQL(MYSQL_CONNECT)
+    MySQLCursor = OpenCursor(MySQLConnect)
+
+    print type(MySQLConnect), type(MySQLCursor)
 
 HTTP_OK                         = 200
 
@@ -226,6 +269,8 @@ def FormatStockInfo(oneotc, stockinfo, response, displayformat):
         exec(displayexec)
     return newinfo
 
+TotalStock = []
+
 class AllQuotes(scrapy.Spider):
     name = 'otcquotes'
     allowed_domains = []
@@ -236,13 +281,21 @@ class AllQuotes(scrapy.Spider):
         dispatcher.connect(self.finalize, signals.engine_stopped)
 
     def initialize(self):
-        self.TotalStock = []
+        pass
  
     def finalize(self):
-        DisplayStockInfo(self.TotalStock)
-        InsertQuotes(self.TotalStock, GLOBAL_INFO)
-#        with open('stockjson', 'wb') as f:
-#            f.write(json.dumps(self.TotalStock, ensure_ascii=False))
+        self.MySQLConnect = OpenMySQL(MYSQL_CONNECT)
+        self.MySQLCursor = OpenCursor(self.MySQLConnect)
+
+        UpdateRecordIfNew(self.MySQLCursor, GLOBAL_INFO[DATABASEQUOTATION])
+        if TOTAL_CRAWL:
+            UpdateRecordIfNew(self.MySQLCursor, GLOBAL_INFO[DATABASEDETAIL])
+
+        self.MySQLConnect.commit()
+
+        CloseMySQL(self.MySQLCursor)
+        CloseMySQL(self.MySQLConnect)
+
  
     def start_requests(self):
         for oneotc in OTC_SITES:
@@ -306,7 +359,7 @@ class AllQuotes(scrapy.Spider):
             if not TOTAL_CRAWL:
 # stock detail info should not crawl everytime
                 formatedstockinfo = FormatStockInfo(oneotc, stockinfo, response, oneotc[DISPLAYINFOPRICE])
-                self.TotalStock.append(formatedstockinfo)
+                TotalStock.append(formatedstockinfo)
                 continue
 
             stockparalist = []
@@ -339,7 +392,7 @@ class AllQuotes(scrapy.Spider):
 
         if stockinfo[STOCKNUMBER]:
             formatedstockinfo = FormatStockInfo(oneotc, stockinfo, response, oneotc[DISPLAYINFODETAIL])
-            self.TotalStock.append(formatedstockinfo)
+            TotalStock.append(formatedstockinfo)
 
 
 '''
